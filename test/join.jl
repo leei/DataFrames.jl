@@ -255,17 +255,23 @@ end
     df1 = DataFrame(Any[[1, 3, 5], [1.0, 3.0, 5.0]], [:id, :fid])
     df2 = DataFrame(Any[[0, 1, 2, 3, 4], [0.0, 1.0, 2.0, 3.0, 4.0]], [:id, :fid])
 
-    @test crossjoin(df1, df2, dupcol=:update) ==
+    update = DataFrames.makeunique_update
+
+    @test crossjoin(df1, df2, makeunique=update) ==
+        DataFrame(Any[repeat([0, 1, 2, 3, 4], outer=3),
+                      repeat([0.0, 1.0, 2.0, 3.0, 4.0], outer=3)],
+                  [:id, :fid])
+    @test crossjoin(df1, df2, makeunique=:update) ==
         DataFrame(Any[repeat([0, 1, 2, 3, 4], outer=3),
                       repeat([0.0, 1.0, 2.0, 3.0, 4.0], outer=3)],
                   [:id, :fid])
 
-    i(on,dupcol=:update) = innerjoin(df1, df2, on=on, dupcol=dupcol)
-    l(on,dupcol=:update) = leftjoin(df1, df2, on=on, dupcol=dupcol)
-    r(on,dupcol=:update) = rightjoin(df1, df2, on=on, dupcol=dupcol)
-    o(on,dupcol=:update) = outerjoin(df1, df2, on=on, dupcol=dupcol)
-    s(on,dupcol=:update) = semijoin(df1, df2, on=on, dupcol=dupcol)
-    a(on,dupcol=:update) = antijoin(df1, df2, on=on, dupcol=dupcol)
+    i(on,makeunique=:update) = innerjoin(df1, df2, on=on, makeunique=makeunique)
+    l(on,makeunique=:update) = leftjoin(df1, df2, on=on, makeunique=makeunique)
+    r(on,makeunique=:update) = rightjoin(df1, df2, on=on, makeunique=makeunique)
+    o(on,makeunique=:update) = outerjoin(df1, df2, on=on, makeunique=makeunique)
+    s(on,makeunique=:update) = semijoin(df1, df2, on=on, makeunique=makeunique)
+    a(on,makeunique=:update) = antijoin(df1, df2, on=on, makeunique=makeunique)
 
     @test s(:id) ==
           s(:fid) ==

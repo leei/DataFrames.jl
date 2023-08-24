@@ -119,8 +119,9 @@ _rename_cols(old_names::AbstractVector{Symbol},
 
 function _propagate_join_metadata!(joiner::DataFrameJoiner, dfr_noon::AbstractDataFrame,
                                    res::DataFrame, kind::Symbol;
-                                   dupcol::Symbol=:error, names=nothing)
+                                   makeunique=false, names=nothing)
     @assert kind == :left || kind == :right || kind == :outer || kind == :inner
+    makeunique = _makeunique_normalize(makeunique)
 
     # The steps taken in this function are (all applies only to :note-style metadata):
     # We initially copy metadata from left table as left table is always used
@@ -175,12 +176,12 @@ function _propagate_join_metadata!(joiner::DataFrameJoiner, dfr_noon::AbstractDa
         end
     end
 
-    if dupcol != :update
+    if makeunique isa Bool
         for i in 1:ncol(dfr_noon)
             _copy_col_note_metadata!(res, ncol(joiner.dfl) + i, dfr_noon, i)
         end
     else
-        map = Index(names, dupcol=dupcol)
+        map = Index(names, makeunique=makeunique)
         for i in 1:ncol(dfr_noon)
             name = map.updates[ncol(joiner.dfl) + i]
             dst = map.lookup[name]
@@ -244,8 +245,7 @@ function _count_sortperm!(input::Vector{Int}, count::Vector,
     return output
 end
 
-function compose_inner_table(joiner::DataFrameJoiner,
-                             dupcol::Symbol,
+function compose_inner_table(joiner::DataFrameJoiner, makeunique,
                              left_rename::Union{Function, AbstractString, Symbol},
                              right_rename::Union{Function, AbstractString, Symbol},
                              order::Symbol)
@@ -288,9 +288,9 @@ function compose_inner_table(joiner::DataFrameJoiner,
 
     new_names = vcat(_rename_cols(_names(joiner.dfl), left_rename, joiner.left_on),
                      _rename_cols(_names(dfr_noon), right_rename))
-    res = DataFrame(cols, new_names, dupcol=dupcol, copycols=false)
+    res = DataFrame(cols, new_names, makeunique=makeunique, copycols=false)
 
-    _propagate_join_metadata!(joiner, dfr_noon, res, :inner, dupcol=dupcol, names=new_names)
+    _propagate_join_metadata!(joiner, dfr_noon, res, :inner, makeunique=makeunique, names=new_names)
     return res
 end
 
@@ -302,7 +302,7 @@ function find_missing_idxs(present::Vector{Int}, target_len::Int)
     return _findall(not_seen)
 end
 
-function compose_joined_table(joiner::DataFrameJoiner, kind::Symbol, dupcol::Symbol,
+function compose_joined_table(joiner::DataFrameJoiner, kind::Symbol, makeunique,
                               left_rename::Union{Function, AbstractString, Symbol},
                               right_rename::Union{Function, AbstractString, Symbol},
                               indicator::Union{Nothing, Symbol, AbstractString},
@@ -324,12 +324,12 @@ function compose_joined_table(joiner::DataFrameJoiner, kind::Symbol, dupcol::Sym
     else
         rightonly_ixs = 1:0
     end
-    return _compose_joined_table(joiner, kind, dupcol, left_rename, right_rename,
+    return _compose_joined_table(joiner, kind, makeunique, left_rename, right_rename,
                                  indicator, left_ixs, right_ixs,
                                  leftonly_ixs, rightonly_ixs, order)
 end
 
-function _compose_joined_table(joiner::DataFrameJoiner, kind::Symbol, dupcol::Symbol,
+function _compose_joined_table(joiner::DataFrameJoiner, kind::Symbol, makeunique,
                                left_rename::Union{Function, AbstractString, Symbol},
                                right_rename::Union{Function, AbstractString, Symbol},
                                indicator::Union{Nothing, Symbol, AbstractString},
@@ -450,14 +450,14 @@ function _compose_joined_table(joiner::DataFrameJoiner, kind::Symbol, dupcol::Sy
 
     new_names = vcat(_rename_cols(_names(joiner.dfl), left_rename, joiner.left_on),
                      _rename_cols(_names(dfr_noon), right_rename))
-    res = DataFrame(cols, new_names, dupcol=dupcol, copycols=false)
+    res = DataFrame(cols, new_names, makeunique=makeunique, copycols=false)
 
     if new_order !== nothing
         isnothing(src_indicator) || permute!(src_indicator, new_order)
         permute!(res, new_order)
     end
 
-    _propagate_join_metadata!(joiner, dfr_noon, res, kind, dupcol=dupcol, names=new_names)
+    _propagate_join_metadata!(joiner, dfr_noon, res, kind, makeunique=makeunique, names=new_names)
 
     return res, src_indicator
 end
@@ -494,7 +494,7 @@ function _sort_compose_helper(fillval::Int, # value to use to fill unused indice
 end
 
 function _join(df1::AbstractDataFrame, df2::AbstractDataFrame;
-               on::Union{<:OnType, AbstractVector}, kind::Symbol, dupcol::Symbol,
+               on::Union{<:OnType, AbstractVector}, kind::Symbol, makeunique,
                indicator::Union{Nothing, Symbol, AbstractString},
                validate::Union{Pair{Bool, Bool}, Tuple{Bool, Bool}},
                left_rename::Union{Function, AbstractString, Symbol},
@@ -589,16 +589,16 @@ function _join(df1::AbstractDataFrame, df2::AbstractDataFrame;
 
     src_indicator = nothing
     if kind == :inner
-        joined = compose_inner_table(joiner, dupcol, left_rename, right_rename, order)
+        joined = compose_inner_table(joiner, makeunique, left_rename, right_rename, order)
     elseif kind == :left
         joined, src_indicator =
-            compose_joined_table(joiner, kind, dupcol, left_rename, right_rename, indicator, order)
+            compose_joined_table(joiner, kind, makeunique, left_rename, right_rename, indicator, order)
     elseif kind == :right
         joined, src_indicator =
-            compose_joined_table(joiner, kind, dupcol, left_rename, right_rename, indicator, order)
+            compose_joined_table(joiner, kind, makeunique, left_rename, right_rename, indicator, order)
     elseif kind == :outer
         joined, src_indicator =
-            compose_joined_table(joiner, kind, dupcol, left_rename, right_rename, indicator, order)
+            compose_joined_table(joiner, kind, makeunique, left_rename, right_rename, indicator, order)
     elseif kind == :semi
         joined = joiner.dfl[find_semi_rows(joiner), :]
     elseif kind == :anti
@@ -614,9 +614,10 @@ function _join(df1::AbstractDataFrame, df2::AbstractDataFrame;
                                        "both" => 3)
         indicatorcol = PooledArray(PooledArrays.RefArray(src_indicator),
                                    invpool, pool)
-
+                                   
+        makeunique = _makeunique_normalize(makeunique)
         unique_indicator = indicator
-        if dupcol == :makeunique
+        if makeunique == true
             try_idx = 0
             while hasproperty(joined, unique_indicator)
                 try_idx += 1
@@ -624,12 +625,12 @@ function _join(df1::AbstractDataFrame, df2::AbstractDataFrame;
             end
         end
 
-        if unique_indicator == indicator && dupcol == :update
-            joined[!, indicator] = _update_missing.(joined[!, indicator], indicatorcol)
+        if unique_indicator == indicator && !isa(makeunique, Bool)
+            joined[!, indicator] = makeunique.(joined[!, indicator], indicatorcol)
         else
             if hasproperty(joined, unique_indicator)
                 throw(ArgumentError("joined data frame already has column " *
-                                    ":$unique_indicator. Pass dupcol=:makeunique to " *
+                                    ":$unique_indicator. Pass makeunique=true to " *
                                     "make it unique using a suffix automatically."))
             end
             joined[!, unique_indicator] = indicatorcol
@@ -642,10 +643,10 @@ function _join(df1::AbstractDataFrame, df2::AbstractDataFrame;
 end
 
 """
-    innerjoin(df1, df2; on, makeunique=false, dupcol=:error, validate=(false, false),
+    innerjoin(df1, df2; on, makeunique=false, validate=(false, false),
               renamecols=(identity => identity), matchmissing=:error,
               order=:undefined)
-    innerjoin(df1, df2, dfs...; on, makeunique=false, dupcol=:error,
+    innerjoin(df1, df2, dfs...; on, makeunique=false,
               validate=(false, false), matchmissing=:error,
               order=:undefined)
 
@@ -769,7 +770,7 @@ julia> innerjoin(name, job2, on = [:ID => :identifier], renamecols = uppercase =
 """
 function innerjoin(df1::AbstractDataFrame, df2::AbstractDataFrame;
                    on::Union{<:OnType, AbstractVector} = Symbol[],
-                   makeunique::Bool=false, dupcol::Symbol=:error,
+                   makeunique=false,
                    validate::Union{Pair{Bool, Bool}, Tuple{Bool, Bool}}=(false, false),
                    renamecols::Pair=identity => identity,
                    matchmissing::Symbol=:error,
@@ -778,7 +779,7 @@ function innerjoin(df1::AbstractDataFrame, df2::AbstractDataFrame;
         throw(ArgumentError("renamecols keyword argument must be a `Pair` " *
                             "containing functions, strings, or `Symbol`s"))
     end
-    return _join(df1, df2, on=on, kind=:inner, dupcol=_dupcol(dupcol, makeunique),
+    return _join(df1, df2, on=on, kind=:inner, makeunique=makeunique,
                  indicator=nothing, validate=validate,
                  left_rename=first(renamecols), right_rename=last(renamecols),
                  matchmissing=matchmissing, order=order)
@@ -786,17 +787,16 @@ end
 
 function innerjoin(df1::AbstractDataFrame, df2::AbstractDataFrame, dfs::AbstractDataFrame...;
                    on::Union{<:OnType, AbstractVector} = Symbol[],
-                   makeunique::Bool=false, dupcol::Symbol=:error,
+                   makeunique=false,
                    validate::Union{Pair{Bool, Bool}, Tuple{Bool, Bool}}=(false, false),
                    matchmissing::Symbol=:error,
                    order::Symbol=:undefined)
     @assert !isempty(dfs)
-    dupcol = _dupcol(dupcol, makeunique)
-    res = innerjoin(df1, df2, on=on, dupcol=dupcol, validate=validate,
+    res = innerjoin(df1, df2, on=on, makeunique=makeunique, validate=validate,
                     matchmissing=matchmissing,
                     order=order === :right ? :undefined : order)
     for (i, dfn) in enumerate(dfs)
-        res = innerjoin(res, dfn, on=on, dupcol=dupcol, validate=validate,
+        res = innerjoin(res, dfn, on=on, makeunique=makeunique, validate=validate,
                         matchmissing=matchmissing,
                         order= order === :right ?
                                (i == length(dfs) ? :right : :undefined) :
@@ -806,7 +806,7 @@ function innerjoin(df1::AbstractDataFrame, df2::AbstractDataFrame, dfs::Abstract
 end
 
 """
-    leftjoin(df1, df2; on, makeunique=false, dupcol=:error, source=nothing, validate=(false, false),
+    leftjoin(df1, df2; on, makeunique=false, source=nothing, validate=(false, false),
              renamecols=(identity => identity), matchmissing=:error, order=:undefined)
 
 Perform a left join of two data frame objects and return a `DataFrame` containing
@@ -830,11 +830,8 @@ change in future releases.
   if duplicate names are found in columns not joined on;
   if `true`, duplicate names will be suffixed with `_i` (deprecated)
   (`i` starting at 1 for the first duplicate).
-- `dupcol` : if `dupcol=:error` (the default) then columns names of passed objects must be unique.
-  If `dupcol=:makeunique` then duplicate column names will be suffixed
-  with `_i` (`i` starting at 1 for the first duplicate).
-  If `dupcol=:update` then duplicate columns names will be combined with the left-hand
-  column overwritten by non-missing values from the right hand column(s)
+  if a Function then combines the duplicated column values by invoking the function
+    with the left-hand values and right-hand values as inputs.
 - `source` : Default: `nothing`. If a `Symbol` or string, adds indicator
   column with the given name, for whether a row appeared in only `df1` (`"left_only"`)
   or in both (`"both"`). If the name is already in use,
@@ -936,7 +933,7 @@ julia> leftjoin(name, job2, on = [:ID => :identifier], renamecols = uppercase =>
 """
 function leftjoin(df1::AbstractDataFrame, df2::AbstractDataFrame;
                   on::Union{<:OnType, AbstractVector} = Symbol[], 
-                  makeunique::Bool=false, dupcol::Symbol=:error,
+                  makeunique=false,
                   source::Union{Nothing, Symbol, AbstractString}=nothing,
                   indicator::Union{Nothing, Symbol, AbstractString}=nothing,
                   validate::Union{Pair{Bool, Bool}, Tuple{Bool, Bool}}=(false, false),
@@ -959,14 +956,14 @@ function leftjoin(df1::AbstractDataFrame, df2::AbstractDataFrame;
                             "It is not allowed to pass both `indicator` and `source` " *
                             "keyword arguments at the same time."))
     end
-    return _join(df1, df2, on=on, kind=:left, dupcol=_dupcol(dupcol, makeunique),
+    return _join(df1, df2, on=on, kind=:left, makeunique=makeunique,
                  indicator=source, validate=validate,
                  left_rename=first(renamecols), right_rename=last(renamecols),
                  matchmissing=matchmissing, order=order)
 end
 
 """
-    rightjoin(df1, df2; on, makeunique=false, dupcol=:error, source=nothing,
+    rightjoin(df1, df2; on, makeunique=false, source=nothing,
               validate=(false, false), renamecols=(identity => identity),
               matchmissing=:error, order=:undefined)
 
@@ -992,12 +989,9 @@ change in future releases.
 - `makeunique` : if `false` (the default), an error will be raised
   if duplicate names are found in columns not joined on;
   if `true`, duplicate names will be suffixed with `_i`
-  (`i` starting at 1 for the first duplicate). (deprecated)
-- `dupcol` : if `dupcol=:error` (the default) then columns names of passed objects must be unique.
-  If `dupcol=:makeunique` then duplicate column names will be suffixed
-  with `_i` (`i` starting at 1 for the first duplicate).
-  If `dupcol=:update` then duplicate columns names will be combined with the left-hand
-  column overwritten by non-missing values from the right hand column(s)
+  (`i` starting at 1 for the first duplicate); otherwise
+  if a Function then invokes that function with the left-hand side value
+  and the right-hand side value as inputs to produce the output value.
 - `source` : Default: `nothing`. If a `Symbol` or string, adds indicator
   column with the given name for whether a row appeared in only `df2` (`"right_only"`)
   or in both (`"both"`). If the name is already in use,
@@ -1099,7 +1093,7 @@ julia> rightjoin(name, job2, on = [:ID => :identifier], renamecols = uppercase =
 """
 function rightjoin(df1::AbstractDataFrame, df2::AbstractDataFrame;
                    on::Union{<:OnType, AbstractVector} = Symbol[], 
-                   makeunique::Bool=false, dupcol::Symbol=:error,
+                   makeunique=false,
                    source::Union{Nothing, Symbol, AbstractString}=nothing,
                    indicator::Union{Nothing, Symbol, AbstractString}=nothing,
                    validate::Union{Pair{Bool, Bool}, Tuple{Bool, Bool}}=(false, false),
@@ -1121,16 +1115,16 @@ function rightjoin(df1::AbstractDataFrame, df2::AbstractDataFrame;
                             "It is not allowed to pass both `indicator` and `source` " *
                             "keyword arguments at the same time."))
     end
-    return _join(df1, df2, on=on, kind=:right, dupcol=_dupcol(dupcol, makeunique),
+    return _join(df1, df2, on=on, kind=:right, makeunique=makeunique,
                  indicator=source, validate=validate,
                  left_rename=first(renamecols), right_rename=last(renamecols),
                  matchmissing=matchmissing, order=order)
 end
 
 """
-    outerjoin(df1, df2; on, makeunique=false, dupcol::Symbol=:error, source=nothing, validate=(false, false),
+    outerjoin(df1, df2; on, makeunique=false, source=nothing, validate=(false, false),
               renamecols=(identity => identity), matchmissing=:error, order=:undefined)
-    outerjoin(df1, df2, dfs...; on, makeunique=false, dupcol::Symbol=:error, 
+    outerjoin(df1, df2, dfs...; on, makeunique=false, 
               validate = (false, false), matchmissing=:error, order=:undefined)
 
 Perform an outer join of two or more data frame objects and return a `DataFrame`
@@ -1156,12 +1150,9 @@ This behavior may change in future releases.
 - `makeunique` : if `false` (the default), an error will be raised
   if duplicate names are found in columns not joined on;
   if `true`, duplicate names will be suffixed with `_i`
-  (`i` starting at 1 for the first duplicate). (deprecated)
-  - `dupcol` : if `dupcol=:error` (the default) then columns names of passed objects must be unique.
-  If `dupcol=:makeunique` then duplicate column names will be suffixed
-  with `_i` (`i` starting at 1 for the first duplicate).
-  If `dupcol=:update` then duplicate columns names will be combined with the left-hand
-  column overwritten by non-missing values from the right hand column(s)
+  (`i` starting at 1 for the first duplicate), otherwise
+  if a Function then this function will be invoked on the values from the left-hand
+  column and the right-hand side column as inputs to create an output value.
 - `source` : Default: `nothing`. If a `Symbol` or string, adds indicator
   column with the given name for whether a row appeared in only `df1` (`"left_only"`),
   only `df2` (`"right_only"`) or in both (`"both"`). If the name is already in use,
@@ -1274,7 +1265,7 @@ julia> outerjoin(name, job2, on = [:ID => :identifier], renamecols = uppercase =
 """
 function outerjoin(df1::AbstractDataFrame, df2::AbstractDataFrame;
                    on::Union{<:OnType, AbstractVector} = Symbol[], 
-                   makeunique::Bool=false, dupcol::Symbol=:error,
+                   makeunique=false,
                    source::Union{Nothing, Symbol, AbstractString}=nothing,
                    indicator::Union{Nothing, Symbol, AbstractString}=nothing,
                    validate::Union{Pair{Bool, Bool}, Tuple{Bool, Bool}}=(false, false),
@@ -1296,7 +1287,7 @@ function outerjoin(df1::AbstractDataFrame, df2::AbstractDataFrame;
                             "It is not allowed to pass both `indicator` and `source` " *
                             "keyword arguments at the same time."))
     end
-    return _join(df1, df2, on=on, kind=:outer, dupcol=_dupcol(dupcol, makeunique),
+    return _join(df1, df2, on=on, kind=:outer, makeunique=makeunique,
                  indicator=source, validate=validate,
                  left_rename=first(renamecols), right_rename=last(renamecols),
                  matchmissing=matchmissing, order=order)
@@ -1304,21 +1295,20 @@ end
 
 function outerjoin(df1::AbstractDataFrame, df2::AbstractDataFrame, dfs::AbstractDataFrame...;
                    on::Union{<:OnType, AbstractVector} = Symbol[], 
-                   makeunique::Bool=false, dupcol::Symbol=:error,
+                   makeunique=false,
                    validate::Union{Pair{Bool, Bool}, Tuple{Bool, Bool}}=(false, false),
                    matchmissing::Symbol=:error, order::Symbol=:undefined)
-    dupcol = _dupcol(dupcol, makeunique)
-    res = outerjoin(df1, df2, on=on, dupcol=dupcol, validate=validate,
+    res = outerjoin(df1, df2, on=on, makeunique=makeunique, validate=validate,
                         matchmissing=matchmissing, order=order)
     for dfn in dfs
-        res = outerjoin(res, dfn, on=on, dupcol=dupcol, validate=validate,
+        res = outerjoin(res, dfn, on=on, makeunique=makeunique, validate=validate,
                         matchmissing=matchmissing, order=order)
     end
     return res
 end
 
 """
-    semijoin(df1, df2; on, makeunique=false, dupcol=:error, validate=(false, false), matchmissing=:error)
+    semijoin(df1, df2; on, makeunique=false, validate=(false, false), matchmissing=:error)
 
 Perform a semi join of two data frame objects and return a `DataFrame`
 containing the result. A semi join returns the subset of rows of `df1` that
@@ -1420,16 +1410,16 @@ julia> semijoin(name, job2, on = [:ID => :identifier])
 ```
 """
 semijoin(df1::AbstractDataFrame, df2::AbstractDataFrame;
-         on::Union{<:OnType, AbstractVector} = Symbol[], makeunique::Bool=false, dupcol::Symbol=:error,
+         on::Union{<:OnType, AbstractVector} = Symbol[], makeunique=false,
          validate::Union{Pair{Bool, Bool}, Tuple{Bool, Bool}}=(false, false),
          matchmissing::Symbol=:error) =
-    _join(df1, df2, on=on, kind=:semi, dupcol=_dupcol(dupcol, makeunique),
+    _join(df1, df2, on=on, kind=:semi, makeunique=makeunique,
           indicator=nothing, validate=validate,
           left_rename=identity, right_rename=identity, matchmissing=matchmissing,
           order=:left)
 
 """
-    antijoin(df1, df2; on, makeunique=false, dupcol=:error, validate=(false, false), matchmissing=:error)
+    antijoin(df1, df2; on, makeunique=false, validate=(false, false), matchmissing=:error)
 
 Perform an anti join of two data frame objects and return a `DataFrame`
 containing the result. An anti join returns the subset of rows of `df1` that do
@@ -1524,10 +1514,10 @@ julia> antijoin(name, job2, on = [:ID => :identifier])
 ```
 """
 antijoin(df1::AbstractDataFrame, df2::AbstractDataFrame;
-         on::Union{<:OnType, AbstractVector} = Symbol[], makeunique::Bool=false, dupcol::Symbol=:error,
+         on::Union{<:OnType, AbstractVector} = Symbol[], makeunique=false,
          validate::Union{Pair{Bool, Bool}, Tuple{Bool, Bool}}=(false, false),
          matchmissing::Symbol=:error) =
-    _join(df1, df2, on=on, kind=:anti, dupcol=_dupcol(dupcol, makeunique),
+    _join(df1, df2, on=on, kind=:anti, makeunique=makeunique,
           indicator=nothing, validate=validate,
           left_rename=identity, right_rename=identity,
           matchmissing=matchmissing,
@@ -1535,7 +1525,7 @@ antijoin(df1::AbstractDataFrame, df2::AbstractDataFrame;
 
 """
     crossjoin(df1::AbstractDataFrame, df2::AbstractDataFrame;
-              makeunique::Bool=false, dupcol::Symbol=:error, renamecols=identity => identity)
+              makeunique=false, renamecols=identity => identity)
     crossjoin(df1, df2, dfs...; makeunique = false)
 
 Perform a cross join of two or more data frame objects and return a `DataFrame`
@@ -1601,22 +1591,22 @@ julia> crossjoin(df1, df2)
 ```
 """
 function crossjoin(df1::AbstractDataFrame, df2::AbstractDataFrame;
-                   makeunique::Bool=false, dupcol::Symbol=:error, renamecols::Pair=identity => identity)
+                   makeunique=false, renamecols::Pair=identity => identity)
     _check_consistency(df1)
     _check_consistency(df2)
-    dupcol = _dupcol(dupcol, makeunique)
     r1, r2 = size(df1, 1), size(df2, 1)
+    makeunique = _makeunique_normalize(makeunique)
 
     new_names = vcat(_rename_cols(_names(df1), first(renamecols)),
                      _rename_cols(_names(df2), last(renamecols)))
     cols = Any[[repeat(c, inner=r2) for c in eachcol(df1)];
                [repeat(c, outer=r1) for c in eachcol(df2)]]
-    res = DataFrame(cols, new_names, copycols=false, dupcol=dupcol)
+    res = DataFrame(cols, new_names, copycols=false, makeunique=makeunique)
 
     for i in 1:ncol(df1)
         _copy_col_note_metadata!(res, i, df1, i)
     end
-    if dupcol != :update
+    if makeunique isa Bool
         for i in 1:ncol(df2)
             _copy_col_note_metadata!(res, ncol(df1) + i, df2, i)
         end
@@ -1628,13 +1618,13 @@ function crossjoin(df1::AbstractDataFrame, df2::AbstractDataFrame;
 end
 
 crossjoin(df1::AbstractDataFrame, df2::AbstractDataFrame, dfs::AbstractDataFrame...;
-          makeunique::Bool=false, dupcol::Symbol=:error) =
-    crossjoin(crossjoin(df1, df2, dupcol=_dupcol(dupcol, makeunique)), dfs..., dupcol=_dupcol(dupcol, makeunique))
+          makeunique=false) =
+    crossjoin(crossjoin(df1, df2, makeunique=makeunique), dfs..., makeunique=makeunique)
 
 # an explicit error is thrown as join was supported in the past
 Base.join(df1::AbstractDataFrame, df2::AbstractDataFrame, dfs::AbstractDataFrame...;
           on::Union{<:OnType, AbstractVector} = Symbol[],
-          kind::Symbol = :inner, makeunique::Bool=false,
+          kind::Symbol = :inner, makeunique=false,
           indicator::Union{Nothing, Symbol} = nothing,
           validate::Union{Pair{Bool, Bool}, Tuple{Bool, Bool}}=(false, false)) =
     throw(ArgumentError("join function for data frames is not supported. Use innerjoin, " *
