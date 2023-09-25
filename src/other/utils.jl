@@ -72,7 +72,15 @@ struct AsTable
     end
 end
 
-function _check_makeunique_args(mergeduplicates, makeunique::Bool=false)
+"""
+MergeDuplicates = Union{Nothing,Function}
+
+Wherever the `mergeduplicates` keyword argument is available it is either `nothing` or
+a `Function` that will be executed to combine duplicated columns (when `makeunique=false`)
+"""
+MergeDuplicates = Union{Nothing,Function}
+
+function _check_makeunique_args(mergeduplicates::MergeDuplicates, makeunique::Bool=false)
     if makeunique && !isnothing(mergeduplicates)
         throw(ArgumentError("mergeduplicates should not  be set if makeunique=true"))
     end
